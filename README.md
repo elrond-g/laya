@@ -46,6 +46,48 @@ Python 3.10 or newer. The dependencies set that floor: `huggingface_hub` 1.x, `t
 
 ---
 
+## Jev-compatible HTTP server
+
+Laya ships an HTTP server that speaks [TypeSafe AI's Jev API](https://docs.typesafe.ai/api), so
+code written against `POST https://api.typesafe.ai/v1/systemone` can point at a self-hosted Laya
+instance by changing only the base URL and dropping the API key.
+
+```bash
+pip install 'laya[server]'
+laya-serve --device cuda --preload          # binds 0.0.0.0:8000 by default
+```
+
+```bash
+curl -X POST http://localhost:8000/v1/systemone \
+  -H "Content-Type: application/json" \
+  -d '{
+        "model": "jev-latest",
+        "state": "Help! My payouts have been failing for 3 days.",
+        "questions": {
+          "is_urgent": {"type": "noul", "instructions": "Does this convey urgency?"},
+          "department": {"type": "choice", "instructions": "Which team should handle this?",
+                         "criteria": {"billing": "Payments, invoicing, refunds",
+                                      "technical": "Bugs, outages, integrations"}}
+        }
+      }'
+```
+
+The response is byte-for-byte the Jev shape — `{model, answers, usage}` with `choice` /
+`score` answers carrying `probabilities` + `confidence` and `noul` answers carrying only
+`noul`. Laya's extra `action` field and the `noul` confidence are stripped.
+
+The `model` field is required, as in Jev. The three Jev ids (`jev-latest`, `jev-preview`,
+`jev-1.13.0`) trigger Laya's auto-routing; a Laya checkpoint name (`english`,
+`multilingual`, `typed-decisions`, or an alias) pins that checkpoint. The response `model`
+reports the checkpoint that actually answered. `GET /v1/models` lists the accepted ids and
+`GET /health` reports which checkpoints are resident.
+
+`--models-dir /path/to/weights` points at a local copy of the three checkpoints (the
+`convaiinnovations/laya` repo root plus its `multilingual/` and `typed-decisions/`
+subfolders) so the server never downloads at startup.
+
+---
+
 ## Quickstart: Route Mode (Recommended)
 
 Laya ships three checkpoints. The built-in **`Router`** is the recommended entry point: it evaluates any state in any language, automatically detects scripts and languages in sub-milliseconds, and dispatches to the optimal checkpoint in a single forward pass.
