@@ -222,11 +222,14 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--device", default=os.environ.get("LAYA_DEVICE"))
     parser.add_argument("--models-dir", default=os.environ.get("LAYA_MODELS_DIR"))
     parser.add_argument(
-        "--no-preload", action="store_true", help="load checkpoints lazily instead of at startup"
+        "--preload",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="preload all checkpoints at startup (default: on; use --no-preload to load lazily)",
     )
     args = parser.parse_args(argv)
 
-    router = build_router(models_dir=args.models_dir, device=args.device, preload=not args.no_preload)
+    router = build_router(models_dir=args.models_dir, device=args.device, preload=args.preload)
     try:
         import uvicorn
     except ImportError as exc:  # pragma: no cover
