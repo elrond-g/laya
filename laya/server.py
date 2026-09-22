@@ -32,12 +32,19 @@ Laya's answers carry two fields Jev does not have -- an ``action`` (escalation
 head) probability on every answer and a ``confidence`` on ``noul`` answers. Both
 are stripped so the response is byte-for-byte the Jev shape.
 
+Authentication
+--------------
+Pass ``--api-key <key>`` (or set ``LAYA_API_KEY``) to require
+``Authorization: Bearer <key>`` on ``/v1/systemone`` and ``/v1/models``; a
+missing or wrong key gets HTTP 401, matching Jev. ``/health`` stays open.
+
 Install the server extras and run::
 
     pip install 'laya[server]'
-    laya-serve --device cuda --preload
+    laya-serve --device cuda --preload --api-key "$LAYA_API_KEY"
 """
 import os
+import secrets
 from typing import Any, Dict, List, Optional
 
 from .router import DEFAULT_MODELS, Router, normalise_name
@@ -157,8 +164,13 @@ def build_router(
     return Router(models=models, device=device, preload=preload)
 
 
-def create_app(router: Router):
-    """Build the FastAPI app around a pre-built Router."""
+def create_app(router: Router, api_key: Optional[str] = None):
+    """Build the FastAPI app around a pre-built Router.
+
+    When ``api_key`` is set, ``POST /v1/systemone`` and ``GET /v1/models``
+    require ``Authorization: Bearer <api_key>`` (401 otherwise). ``/health``
+    stays open for liveness probes.
+    """
     try:
         from fastapi import FastAPI, HTTPException, Request
     except ImportError as exc:  # pragma: no cover - only without the server extra
@@ -168,12 +180,25 @@ def create_app(router: Router):
 
     app = FastAPI(title="Laya (Jev-compatible)", version="0.1.0")
 
+    def _check_auth(authorization: Optional[str]) -> None:
+        if not api_key:
+            return
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(
+                status_code=401,
+                detail="missing or invalid API key; use 'Authorization: Bearer <API_KEY>'",
+            )
+        token = authorization[len("Bearer "):].strip()
+        if not secrets.compare_digest(token, api_key):
+            raise HTTPException(status_code=401, detail="invalid API key")
+
     @app.get("/health")
     def health():
         return {"status": "ok", "loaded": router.loaded}
 
     @app.get("/v1/models")
-    def models():
+    def models(request: Request):
+        _check_auth(request.headers.get("authorization"))
         return {
             "object": "list",
             "data": [{"id": mid, "object": "model"} for mid in _KNOWN_MODELS],
@@ -181,6 +206,7 @@ def create_app(router: Router):
 
     @app.post("/v1/systemone")
     async def systemone(request: Request):
+        _check_auth(request.headers.get("authorization"))
         try:
             body = await request.json()
         except Exception as exc:
@@ -222,6 +248,11 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--device", default=os.environ.get("LAYA_DEVICE"))
     parser.add_argument("--models-dir", default=os.environ.get("LAYA_MODELS_DIR"))
     parser.add_argument(
+        "--api-key",
+        default=os.environ.get("LAYA_API_KEY"),
+        help="require 'Authorization: Bearer <key>' on the API endpoints (default: off)",
+    )
+    parser.add_argument(
         "--preload",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -236,7 +267,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         raise ImportError(
             "the Laya server needs uvicorn; install with `pip install 'laya[server]'`"
         ) from exc
-    uvicorn.run(create_app(router), host=args.host, port=args.port)
+    uvicorn.run(create_app(router, api_key=args.api_key), host=args.host, port=args.port)
 
 
 if __name__ == "__main__":  # pragma: no cover
